@@ -1,0 +1,59 @@
+{
+  "2-west": {
+    "_id": "survey-17",
+    "_rev": "2-west",
+    "answers": {
+      "households": 6
+    },
+    "_revisions": {
+      "start": 2,
+      "ids": [
+        "west",
+        "root"
+      ]
+    },
+    "_attachments": {
+      "photo.jpg": {
+        "content_type": "image/jpeg",
+        "digest": "md5-lEVBPoy31vmUmjbnYNOjVw==",
+        "length": 12,
+        "stub": true
+      }
+    }
+  },
+  "2-east": {
+    "_id": "survey-17",
+    "_rev": "2-east",
+    "answers": {
+      "households": 7
+    },
+    "_revisions": {
+      "start": 2,
+      "ids": [
+        "east",
+        "root"
+      ]
+    },
+    "_attachments": {
+      "photo.jpg": {
+        "content_type": "image/jpeg",
+        "length": 12,
+        "stub": true,
+        "digest": "md5-/TDJpeWV7zgfYQePtfcO9A=="
+      }
+    }
+  },
+  "3-deleted": {
+    "_id": "survey-17",
+    "_rev": "3-deleted",
+    "_deleted": true,
+    "_revisions": {
+      "start": 3,
+      "ids": [
+        "deleted",
+        "west",
+        "root"
+      ]
+    }
+  }
+}
