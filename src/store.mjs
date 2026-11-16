@@ -21,7 +21,17 @@ export async function openStore(directory) {
     pending = next.catch(() => {});
     return next;
   };
+  const putBlob = async bytes => {
+    const sha256 = digest(bytes);
+    try {
+      await writeFile(join(directory, 'blobs', sha256), bytes, { flag: 'wx' });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    return sha256;
+  };
   return {
+    putBlob,
     list() {
       const latest = new Map();
       for (const receipt of receipts) latest.set(receipt.key, receipt);
@@ -55,13 +65,7 @@ export async function openStore(directory) {
         const identity = digest(JSON.stringify({ key, record, refs }));
         const existing = receipts.find(receipt => receipt.identity === identity);
         if (existing) return { ...structuredClone(existing), duplicate: true };
-        for (const item of prepared) {
-          try {
-            await writeFile(join(directory, 'blobs', item.ref.sha256), item.bytes, { flag: 'wx' });
-          } catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-          }
-        }
+        for (const item of prepared) await putBlob(item.bytes);
         const receipt = { sequence: receipts.length + 1, identity, key, record: structuredClone(record), evidence: refs, receivedAt: new Date().toISOString() };
         await appendFile(journal, JSON.stringify(receipt) + '\n');
         receipts.push(receipt);

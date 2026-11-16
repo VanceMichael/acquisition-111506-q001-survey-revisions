@@ -2,6 +2,7 @@
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
+import { createCollector } from './collector.mjs';
 import { validateRecord, product } from './domain.mjs';
 
 export async function readJson(request, limit = 8 * 1024 * 1024) {
@@ -21,8 +22,9 @@ export function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-export async function startApplication({ directory, port = 0, host = '127.0.0.1' }) {
+export async function startApplication({ directory, port = 0, host = '127.0.0.1', sourceUrl = process.env.SOURCE_URL ?? 'http://127.0.0.1:4311' }) {
   const store = await openStore(directory);
+  const collector = await createCollector({ directory, store, sourceUrl });
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://localhost');
@@ -32,6 +34,19 @@ export async function startApplication({ directory, port = 0, host = '127.0.0.1'
         const { key, record } = validateRecord(input.record);
         const receipt = await store.accept(key, record, input.evidence);
         return sendJson(response, receipt.duplicate ? 200 : 201, receipt);
+      }
+      if (request.method === 'POST' && url.pathname === '/api/collect') {
+        request.resume();
+        const summary = await collector.run();
+        return sendJson(response, summary.ok ? 200 : 502, summary);
+      }
+      if (request.method === 'GET' && url.pathname === '/api/collection') {
+        const key = url.searchParams.get('key');
+        if (key) {
+          const survey = collector.survey(key);
+          return survey ? sendJson(response, 200, survey) : sendJson(response, 404, { error: '该业务标识没有自动采集记录' });
+        }
+        return sendJson(response, 200, collector.model());
       }
       if (request.method === 'GET' && url.pathname === '/api/records') return sendJson(response, 200, store.list());
       if (request.method === 'GET' && url.pathname === '/api/history') return sendJson(response, 200, store.history(url.searchParams.get('key')));
@@ -50,7 +65,7 @@ export async function startApplication({ directory, port = 0, host = '127.0.0.1'
     server.once('error', reject);
     server.listen(port, host, resolve);
   });
-  return { store, server, url: `http://${host}:${server.address().port}`, async close() {
+  return { store, collector, server, url: `http://${host}:${server.address().port}`, async close() {
     await new Promise(resolve => server.close(resolve));
     await store.flush();
   } };
