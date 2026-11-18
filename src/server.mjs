@@ -3,6 +3,8 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { openStore } from './store.mjs';
 import { validateRecord, product } from './domain.mjs';
+import { createSourceClient } from './source-client.mjs';
+import { runCollection } from './collector.mjs';
 
 export async function readJson(request, limit = 8 * 1024 * 1024) {
   const chunks = [];
@@ -21,8 +23,9 @@ export function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-export async function startApplication({ directory, port = 0, host = '127.0.0.1' }) {
+export async function startApplication({ directory, port = 0, host = '127.0.0.1', sourceUrl = process.env.SOURCE_URL ?? 'http://127.0.0.1:4311' } = {}) {
   const store = await openStore(directory);
+  let collectionRun = null;
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, 'http://localhost');
@@ -35,6 +38,43 @@ export async function startApplication({ directory, port = 0, host = '127.0.0.1'
       }
       if (request.method === 'GET' && url.pathname === '/api/records') return sendJson(response, 200, store.list());
       if (request.method === 'GET' && url.pathname === '/api/history') return sendJson(response, 200, store.history(url.searchParams.get('key')));
+      // 自动采集状态：复核视图，含每个答卷的存活叶、墓碑、压缩清理与附件去向。
+      if (request.method === 'GET' && url.pathname === '/api/collection') return sendJson(response, 200, store.collectionState());
+      // 触发一次只读自动采集；并发触发共用同一次运行。
+      if (request.method === 'POST' && url.pathname === '/api/collection/run') {
+        const body = await readJson(request).catch(() => ({}));
+        const targetUrl = typeof body?.sourceUrl === 'string' && body.sourceUrl.trim() ? body.sourceUrl : sourceUrl;
+        if (!collectionRun) {
+          const source = createSourceClient(targetUrl, { timeoutMs: Number(body?.timeoutMs) || 15000 });
+          collectionRun = runCollection(store, source, {
+            maxAttempts: Number(body?.maxAttempts) || 3,
+            baseDelayMs: Number(body?.baseDelayMs) || 50,
+          }).then(report => ({ report }), error => ({ error })).finally(() => { collectionRun = null; });
+        }
+        const outcome = await collectionRun;
+        if (outcome.error) throw outcome.error;
+        return sendJson(response, outcome.report.status === 'blocked' ? 202 : 200, outcome.report);
+      }
+      // 回查采集到的修订状态与结构化内容。
+      if (request.method === 'GET' && url.pathname === '/api/collection/revision') {
+        const id = url.searchParams.get('id');
+        const rev = url.searchParams.get('rev');
+        const state = store.collectionRevision(id, rev);
+        if (!state) return sendJson(response, 404, { error: '未采集到该修订' });
+        return sendJson(response, 200, state);
+      }
+      // 回查采集到的附件字节；暂时不可用或无字节的分支返回明确状态而非 404 冒充删除。
+      if (request.method === 'GET' && url.pathname === '/api/collection/attachment') {
+        const id = url.searchParams.get('id');
+        const rev = url.searchParams.get('rev');
+        const name = url.searchParams.get('name');
+        const state = store.collectionAttachment(id, rev, name);
+        if (!state) return sendJson(response, 404, { error: '该修订没有这个附件的采集记录' });
+        if (state.state !== 'available') return sendJson(response, 409, { error: '附件尚未取得', state });
+        const bytes = await store.evidence(state.sha256);
+        response.writeHead(200, { 'content-type': state.mediaType ?? 'application/octet-stream' });
+        return response.end(bytes);
+      }
       if (request.method === 'GET' && url.pathname.startsWith('/api/evidence/')) {
         const bytes = await store.evidence(url.pathname.slice('/api/evidence/'.length));
         response.writeHead(200, { 'content-type': 'application/octet-stream' });
